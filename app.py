@@ -5,11 +5,19 @@ import re
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 NAVER_CLIENT_ID = st.secrets["NAVER_CLIENT_ID"]
 NAVER_CLIENT_SECRET = st.secrets["NAVER_CLIENT_SECRET"]
+SUPABASE_URL = st.secrets["SUPABASE_URL"]
+SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
 PRESET_PROMPTS = {
     "친근하게": "친한 친구한테 말하듯 반말로, 쉽고 재미있게 3줄 요약해줘.",
     "전문적으로": "짧고 간결한 문어체로, 핵심 사실만 3줄 요약해줘.",
     "쉽게 설명": "중학생도 이해할 수 있도록 쉬운 단어로 3줄 요약해줘.",
+}
+
+SUPABASE_HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
 }
 
 def clean_html(text):
@@ -35,7 +43,6 @@ def summarize(article, prompt_instruction):
 
 기사:
 {article}"""
-
     response = requests.post(
         "https://api.groq.com/openai/v1/chat/completions",
         headers={
@@ -49,6 +56,28 @@ def summarize(article, prompt_instruction):
     )
     return response.json()["choices"][0]["message"]["content"]
 
+def fetch_market_prompts():
+    res = requests.get(
+        f"{SUPABASE_URL}/rest/v1/prompts?select=*&order=likes.desc",
+        headers=SUPABASE_HEADERS,
+    )
+    return res.json() if res.status_code == 200 else []
+
+def upload_prompt(name, content):
+    res = requests.post(
+        f"{SUPABASE_URL}/rest/v1/prompts",
+        headers={**SUPABASE_HEADERS, "Prefer": "return=representation"},
+        json={"name": name, "content": content},
+    )
+    return res.status_code == 201
+
+def like_prompt(prompt_id, current_likes):
+    requests.patch(
+        f"{SUPABASE_URL}/rest/v1/prompts?id=eq.{prompt_id}",
+        headers=SUPABASE_HEADERS,
+        json={"likes": current_likes + 1},
+    )
+
 # --- 초기 세션 상태 ---
 if "my_prompts" not in st.session_state:
     st.session_state["my_prompts"] = {}
@@ -58,8 +87,7 @@ st.set_page_config(page_title="AI 맞춤 기사 요약", page_icon="📰")
 st.title("📰 AI 맞춤 기사 요약")
 st.caption("나만의 말투로 뉴스를 읽다")
 
-# --- 탭 구성 ---
-tab1, tab2 = st.tabs(["📰 뉴스 요약", "⚙️ 내 프롬프트 설정"])
+tab1, tab2, tab3 = st.tabs(["📰 뉴스 요약", "⚙️ 내 프롬프트 설정", "🏪 프롬프트 마켓"])
 
 # ===== 탭 1: 뉴스 요약 =====
 with tab1:
@@ -94,7 +122,6 @@ with tab1:
         height=150,
     )
 
-    # 스타일 선택: 프리셋 + 내가 저장한 프롬프트
     my_prompt_names = list(st.session_state["my_prompts"].keys())
     all_styles = list(PRESET_PROMPTS.keys()) + my_prompt_names
     style = st.radio("요약 스타일 선택", all_styles, horizontal=True)
@@ -133,19 +160,66 @@ with tab2:
         height=100,
     )
 
-    if st.button("저장하기", type="primary"):
-        if new_name.strip() and new_prompt.strip():
-            st.session_state["my_prompts"][new_name] = new_prompt
-            st.success(f"'{new_name}' 저장 완료! '뉴스 요약' 탭에서 바로 사용할 수 있어요.")
-        else:
-            st.warning("이름과 내용을 모두 입력해주세요.")
+    col_save, col_share = st.columns(2)
+
+    with col_save:
+        if st.button("내 목록에 저장", type="primary"):
+            if new_name.strip() and new_prompt.strip():
+                st.session_state["my_prompts"][new_name] = new_prompt
+                st.success(f"'{new_name}' 저장 완료!")
+            else:
+                st.warning("이름과 내용을 모두 입력해주세요.")
+
+    with col_share:
+        if st.button("마켓에 공유하기"):
+            if new_name.strip() and new_prompt.strip():
+                with st.spinner("공유 중..."):
+                    ok = upload_prompt(new_name, new_prompt)
+                if ok:
+                    st.success("마켓에 공유됐어요! '프롬프트 마켓' 탭에서 확인하세요.")
+                else:
+                    st.error("공유 중 오류가 발생했습니다.")
+            else:
+                st.warning("이름과 내용을 모두 입력해주세요.")
 
     if st.session_state["my_prompts"]:
         st.divider()
         st.subheader("📋 저장된 내 프롬프트")
-        for name, content in st.session_state["my_prompts"].items():
+        for name, content in list(st.session_state["my_prompts"].items()):
             col1, col2 = st.columns([4, 1])
             col1.markdown(f"**{name}**: {content}")
             if col2.button("삭제", key=f"del_{name}"):
                 del st.session_state["my_prompts"][name]
                 st.rerun()
+
+# ===== 탭 3: 프롬프트 마켓 =====
+with tab3:
+    st.subheader("🏪 프롬프트 마켓")
+    st.caption("다른 사용자가 공유한 프롬프트를 탐색하고 내 목록에 추가하세요.")
+
+    if st.button("새로고침"):
+        st.session_state.pop("market_prompts", None)
+
+    if "market_prompts" not in st.session_state:
+        with st.spinner("불러오는 중..."):
+            st.session_state["market_prompts"] = fetch_market_prompts()
+
+    market_prompts = st.session_state["market_prompts"]
+
+    if not market_prompts:
+        st.info("아직 공유된 프롬프트가 없어요. 첫 번째로 공유해보세요!")
+    else:
+        for p in market_prompts:
+            with st.container(border=True):
+                col_info, col_btn = st.columns([5, 2])
+                with col_info:
+                    st.markdown(f"**{p['name']}**")
+                    st.caption(p["content"])
+                with col_btn:
+                    if st.button(f"👍 {p['likes']}", key=f"like_{p['id']}"):
+                        like_prompt(p["id"], p["likes"])
+                        st.session_state.pop("market_prompts", None)
+                        st.rerun()
+                    if st.button("내 목록에 추가", key=f"add_{p['id']}"):
+                        st.session_state["my_prompts"][p["name"]] = p["content"]
+                        st.success(f"'{p['name']}' 추가 완료!")
