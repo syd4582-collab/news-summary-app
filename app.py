@@ -6,6 +6,12 @@ GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 NAVER_CLIENT_ID = st.secrets["NAVER_CLIENT_ID"]
 NAVER_CLIENT_SECRET = st.secrets["NAVER_CLIENT_SECRET"]
 
+PRESET_PROMPTS = {
+    "친근하게": "친한 친구한테 말하듯 반말로, 쉽고 재미있게 3줄 요약해줘.",
+    "전문적으로": "짧고 간결한 문어체로, 핵심 사실만 3줄 요약해줘.",
+    "쉽게 설명": "중학생도 이해할 수 있도록 쉬운 단어로 3줄 요약해줘.",
+}
+
 def clean_html(text):
     return re.sub(r"<.*?>", "", text)
 
@@ -22,14 +28,10 @@ def search_news(query):
     )
     return response.json().get("items", [])
 
-def summarize(article, style):
-    prompt = f"""다음 기사를 아래 스타일로 3줄 요약해줘.
-반드시 한국어만 사용해. 한자나 영어 절대 금지.
+def summarize(article, prompt_instruction):
+    prompt = f"""다음 기사를 요약해줘. 반드시 한국어만 사용해. 한자나 영어 절대 금지.
 
-스타일: {style}
-- 친근하게: 친한 친구한테 말하듯 반말로, 쉽고 재미있게
-- 전문적으로: 짧고 간결한 문어체, 핵심만
-- 쉽게 설명: 중학생도 이해할 수 있도록 쉬운 단어로
+지시사항: {prompt_instruction}
 
 기사:
 {article}"""
@@ -47,54 +49,103 @@ def summarize(article, style):
     )
     return response.json()["choices"][0]["message"]["content"]
 
+# --- 초기 세션 상태 ---
+if "my_prompts" not in st.session_state:
+    st.session_state["my_prompts"] = {}
+
 # --- UI ---
 st.set_page_config(page_title="AI 맞춤 기사 요약", page_icon="📰")
 st.title("📰 AI 맞춤 기사 요약")
 st.caption("나만의 말투로 뉴스를 읽다")
 
-# --- 뉴스 검색 ---
-st.subheader("🔍 뉴스 검색")
-query = st.text_input("검색어를 입력하세요", placeholder="예: 금리, 반도체, 대선")
+# --- 탭 구성 ---
+tab1, tab2 = st.tabs(["📰 뉴스 요약", "⚙️ 내 프롬프트 설정"])
 
-if st.button("검색"):
-    if query.strip():
-        with st.spinner("기사 검색 중..."):
-            items = search_news(query)
-        if items:
-            st.session_state["news_items"] = items
-        else:
-            st.warning("검색 결과가 없습니다.")
+# ===== 탭 1: 뉴스 요약 =====
+with tab1:
+    st.subheader("🔍 뉴스 검색")
+    query = st.text_input("검색어를 입력하세요", placeholder="예: 금리, 반도체, 대선")
 
-if "news_items" in st.session_state:
-    titles = [clean_html(item["title"]) for item in st.session_state["news_items"]]
-    selected = st.radio("기사를 선택하세요", titles)
-    idx = titles.index(selected)
-    selected_article = clean_html(
-        st.session_state["news_items"][idx]["title"] + "\n" +
-        st.session_state["news_items"][idx]["description"]
+    if st.button("검색"):
+        if query.strip():
+            with st.spinner("기사 검색 중..."):
+                items = search_news(query)
+            if items:
+                st.session_state["news_items"] = items
+            else:
+                st.warning("검색 결과가 없습니다.")
+
+    if "news_items" in st.session_state:
+        titles = [clean_html(item["title"]) for item in st.session_state["news_items"]]
+        selected = st.radio("기사를 선택하세요", titles)
+        idx = titles.index(selected)
+        selected_article = clean_html(
+            st.session_state["news_items"][idx]["title"] + "\n" +
+            st.session_state["news_items"][idx]["description"]
+        )
+        st.session_state["selected_article"] = selected_article
+
+    st.divider()
+
+    st.subheader("📝 기사 요약")
+    article = st.text_area(
+        "기사 내용 (검색 후 자동 입력되거나 직접 붙여넣기 가능)",
+        value=st.session_state.get("selected_article", ""),
+        height=150,
     )
-    st.session_state["selected_article"] = selected_article
 
-st.divider()
+    # 스타일 선택: 프리셋 + 내가 저장한 프롬프트
+    my_prompt_names = list(st.session_state["my_prompts"].keys())
+    all_styles = list(PRESET_PROMPTS.keys()) + my_prompt_names
+    style = st.radio("요약 스타일 선택", all_styles, horizontal=True)
 
-# --- 요약 ---
-st.subheader("📝 기사 요약")
-article = st.text_area(
-    "기사 내용 (검색 후 자동 입력되거나 직접 붙여넣기 가능)",
-    value=st.session_state.get("selected_article", ""),
-    height=150,
-)
-
-style = st.radio(
-    "요약 스타일 선택",
-    ["친근하게", "전문적으로", "쉽게 설명"],
-    horizontal=True,
-)
-
-if st.button("요약하기", type="primary"):
-    if article.strip():
-        with st.spinner("요약 중..."):
-            result = summarize(article, style)
-        st.success(result)
+    if style in PRESET_PROMPTS:
+        prompt_instruction = PRESET_PROMPTS[style]
     else:
-        st.warning("기사 내용을 먼저 입력해주세요.")
+        prompt_instruction = st.session_state["my_prompts"][style]
+
+    st.caption(f"현재 프롬프트: _{prompt_instruction}_")
+
+    if st.button("요약하기", type="primary"):
+        if article.strip():
+            with st.spinner("요약 중..."):
+                result = summarize(article, prompt_instruction)
+            st.success(result)
+        else:
+            st.warning("기사 내용을 먼저 입력해주세요.")
+
+# ===== 탭 2: 내 프롬프트 설정 =====
+with tab2:
+    st.subheader("⚙️ 나만의 프롬프트 만들기")
+    st.caption("AI에게 어떤 방식으로 요약할지 직접 지시해보세요.")
+
+    with st.expander("💡 프롬프트 작성 예시"):
+        st.markdown("""
+- `드라마 해설사처럼 극적으로, 이모티콘 많이 써서 3줄 요약해줘.`
+- `뉴스 앵커처럼 딱딱하고 공식적인 말투로 핵심만 2줄로 요약해줘.`
+- `초등학생에게 설명하듯이 비유를 들어서 쉽게 3줄 요약해줘.`
+        """)
+
+    new_name = st.text_input("프롬프트 이름", placeholder="예: 드라마틱하게")
+    new_prompt = st.text_area(
+        "프롬프트 내용",
+        placeholder="AI에게 내릴 지시를 자유롭게 작성하세요.",
+        height=100,
+    )
+
+    if st.button("저장하기", type="primary"):
+        if new_name.strip() and new_prompt.strip():
+            st.session_state["my_prompts"][new_name] = new_prompt
+            st.success(f"'{new_name}' 저장 완료! '뉴스 요약' 탭에서 바로 사용할 수 있어요.")
+        else:
+            st.warning("이름과 내용을 모두 입력해주세요.")
+
+    if st.session_state["my_prompts"]:
+        st.divider()
+        st.subheader("📋 저장된 내 프롬프트")
+        for name, content in st.session_state["my_prompts"].items():
+            col1, col2 = st.columns([4, 1])
+            col1.markdown(f"**{name}**: {content}")
+            if col2.button("삭제", key=f"del_{name}"):
+                del st.session_state["my_prompts"][name]
+                st.rerun()
