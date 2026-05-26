@@ -10,9 +10,27 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
 PRESET_PROMPTS = {
-    "친근하게": "친한 친구한테 말하듯 반말로, 쉽고 재미있게 3줄 요약해줘.",
-    "전문적으로": "짧고 간결한 문어체로, 핵심 사실만 3줄 요약해줘.",
-    "쉽게 설명": "중학생도 이해할 수 있도록 쉬운 단어로 3줄 요약해줘.",
+    "친근하게": (
+        "너는 친한 친구에게 오늘 뉴스를 재미있게 전해주는 사람이야. "
+        "딱딱한 표현은 쓰지 말고 자연스러운 반말로 얘기해줘. "
+        "어려운 용어가 나오면 일상적인 말로 바꿔서 설명하고, "
+        "이모티콘을 1~2개 섞어서 읽는 재미를 더해줘. "
+        "5줄로, 핵심 내용과 '그래서 나한테 뭐가 중요한지'까지 포함해서 요약해줘."
+    ),
+    "전문적으로": (
+        "너는 10년 경력의 시니어 경제 전문 기자야. "
+        "육하원칙 기반의 간결한 문어체로, 핵심 수치와 사실만 담아줘. "
+        "불필요한 수식어와 감정적 표현은 철저히 배제하고, "
+        "독자가 스스로 판단할 수 있도록 배경 맥락도 한 문장 포함해줘. "
+        "5줄로 정리하되, 각 줄이 독립적인 핵심 정보를 담도록 구성해줘."
+    ),
+    "쉽게 설명": (
+        "너는 복잡한 뉴스를 누구나 이해하게 풀어주는 선생님이야. "
+        "처음 이 뉴스를 접하는 사람도 이해할 수 있도록 쉬운 단어만 사용하고, "
+        "어려운 개념은 반드시 친숙한 비유나 예시로 바꿔서 설명해줘. "
+        "'왜 이 뉴스가 중요한지', '내 생활에 어떤 영향을 주는지'도 포함해줘. "
+        "5줄로 요약하되, 마지막 줄은 핵심 한 문장 정리로 마무리해줘."
+    ),
 }
 
 SUPABASE_HEADERS = {
@@ -22,6 +40,9 @@ SUPABASE_HEADERS = {
 }
 
 KST = timezone(timedelta(hours=9))
+
+DAILY_KEYWORDS = [k.strip() for k in st.secrets.get("DAILY_KEYWORDS", "경제,인공지능,정치").split(",")]
+DAILY_STYLE    = st.secrets.get("DAILY_STYLE", "쉽게 설명")
 
 # ───────────── 유틸 함수 ─────────────
 
@@ -92,6 +113,44 @@ def delete_prompt(prompt_id):
         headers=SUPABASE_HEADERS,
     )
     return res.status_code in (200, 204)
+
+# ── 오늘의 브리핑 ──
+def fetch_daily_feed():
+    """오늘 날짜의 브리핑이 Supabase에 있으면 바로 반환, 없으면 생성 후 반환"""
+    today = datetime.now(KST).strftime("%Y-%m-%d")
+    res = requests.get(
+        f"{SUPABASE_URL}/rest/v1/daily_feed?feed_date=eq.{today}&select=*&order=id.asc",
+        headers=SUPABASE_HEADERS,
+    )
+    if res.status_code == 200 and res.json():
+        return res.json(), False   # (데이터, 새로 생성 여부)
+
+    # 오늘 데이터 없음 → 새로 생성
+    instruction = PRESET_PROMPTS.get(DAILY_STYLE, PRESET_PROMPTS["쉽게 설명"])
+    feed_items = []
+    for keyword in DAILY_KEYWORDS:
+        try:
+            items = search_news(keyword)
+            if not items:
+                continue
+            article_text = clean_html(items[0]["title"] + "\n" + items[0]["description"])
+            summary_text = summarize(article_text, instruction)
+            row = {
+                "keyword":       keyword,
+                "article_title": clean_html(items[0]["title"]),
+                "summary":       summary_text,
+                "style":         DAILY_STYLE,
+                "feed_date":     today,
+            }
+            requests.post(
+                f"{SUPABASE_URL}/rest/v1/daily_feed",
+                headers={**SUPABASE_HEADERS, "Prefer": "return=minimal"},
+                json=row,
+            )
+            feed_items.append(row)
+        except Exception:
+            continue
+    return feed_items, True
 
 # ── ③ 요약 히스토리 ──
 def save_history(article_preview, summary, style):
@@ -320,6 +379,89 @@ with st.sidebar:
     </div>
 </div>
     """, unsafe_allow_html=True)
+
+# ── 오늘의 브리핑 섹션 ──
+today_label = datetime.now(KST).strftime("%Y년 %m월 %d일")
+
+st.markdown(f"""
+<div style="
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 0.8rem;
+">
+    <span style="
+        font-size: 1.3rem;
+        font-weight: 900;
+        color: #2d3748;
+    ">📅 오늘의 뉴스 브리핑</span>
+    <span style="
+        background: #ede9fe;
+        color: #6d28d9;
+        font-size: 0.75rem;
+        font-weight: 700;
+        padding: 3px 10px;
+        border-radius: 999px;
+    ">{today_label}</span>
+    <span style="
+        background: #f0fdf4;
+        color: #15803d;
+        font-size: 0.75rem;
+        font-weight: 700;
+        padding: 3px 10px;
+        border-radius: 999px;
+    ">✨ {DAILY_STYLE} 스타일</span>
+</div>
+""", unsafe_allow_html=True)
+
+if "daily_feed" not in st.session_state:
+    with st.spinner("오늘의 기사를 요약하는 중입니다... (첫 방문 시 최대 20초 소요)"):
+        st.session_state["daily_feed"], is_new = fetch_daily_feed()
+
+feed = st.session_state["daily_feed"]
+
+if feed:
+    cols = st.columns(len(feed))
+    for col, item in zip(cols, feed):
+        with col:
+            st.markdown(f"""
+<div style="
+    background: white;
+    border-radius: 16px;
+    padding: 1.2rem 1.4rem;
+    box-shadow: 0 2px 16px rgba(91,79,233,0.10);
+    border-top: 4px solid #667eea;
+    height: 100%;
+    min-height: 180px;
+">
+    <span style="
+        background: #ede9fe;
+        color: #6d28d9;
+        font-size: 0.7rem;
+        font-weight: 800;
+        padding: 2px 10px;
+        border-radius: 999px;
+        letter-spacing: 0.5px;
+    ">#{item['keyword']}</span>
+    <p style="
+        font-size: 0.85rem;
+        font-weight: 700;
+        color: #374151;
+        margin: 0.6rem 0 0.4rem;
+        line-height: 1.4;
+    ">{item['article_title'][:40]}{'...' if len(item['article_title']) > 40 else ''}</p>
+    <p style="
+        font-size: 0.82rem;
+        color: #6b7280;
+        line-height: 1.6;
+        margin: 0;
+    ">{item['summary']}</p>
+</div>
+            """, unsafe_allow_html=True)
+else:
+    st.info("오늘의 브리핑을 불러오지 못했습니다. 잠시 후 새로고침해주세요.")
+
+st.markdown("<div style='margin-bottom:1.5rem'></div>", unsafe_allow_html=True)
 
 # ── 탭 ──
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
