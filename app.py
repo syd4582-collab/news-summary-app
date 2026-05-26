@@ -121,10 +121,207 @@ if "my_uploaded_ids" not in st.session_state:
     st.session_state["my_uploaded_ids"] = set() # 이번 세션에서 올린 프롬프트 id
 
 # ───────────── UI ─────────────
-st.set_page_config(page_title="AI 맞춤 기사 요약", page_icon="📰")
-st.title("📰 AI 맞춤 기사 요약")
-st.caption("나만의 말투로 뉴스를 읽다")
+st.set_page_config(
+    page_title="AI 맞춤 기사 요약",
+    page_icon="📰",
+    layout="wide",
+)
 
+# ── CSS 주입 ──
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700;900&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Noto Sans KR', sans-serif;
+}
+
+/* 상단 햄버거 메뉴·푸터 숨김 */
+#MainMenu {visibility: hidden;}
+footer     {visibility: hidden;}
+
+/* 메인 여백 */
+.main .block-container {
+    padding-top: 1.5rem;
+    padding-bottom: 2rem;
+}
+
+/* 탭 스타일 */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 6px;
+    background: #eff0f7;
+    border-radius: 14px;
+    padding: 5px;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 10px;
+    padding: 8px 18px;
+    font-weight: 600;
+    color: #6b7280;
+}
+.stTabs [aria-selected="true"] {
+    background: white !important;
+    color: #5b4fe9 !important;
+    box-shadow: 0 2px 10px rgba(91,79,233,0.15);
+}
+
+/* Primary 버튼 */
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border: none;
+    border-radius: 12px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    transition: transform .15s, box-shadow .15s;
+}
+.stButton > button[kind="primary"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(102,126,234,0.45);
+}
+
+/* Secondary 버튼 */
+.stButton > button[kind="secondary"] {
+    border-radius: 12px;
+    border: 1.5px solid #667eea;
+    color: #667eea;
+    font-weight: 600;
+}
+
+/* 입력창 */
+.stTextInput  > div > div > input,
+.stTextArea   > div > div > textarea {
+    border-radius: 10px;
+    border: 1.5px solid #e2e8f0;
+    transition: border-color .2s, box-shadow .2s;
+}
+.stTextInput  > div > div > input:focus,
+.stTextArea   > div > div > textarea:focus {
+    border-color: #667eea;
+    box-shadow: 0 0 0 3px rgba(102,126,234,0.15);
+}
+
+/* 알림 박스 둥글게 */
+.stSuccess, .stWarning, .stError, .stInfo {
+    border-radius: 12px;
+}
+
+/* 사이드바 다크 그라디언트 */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg,#1a1a2e 0%,#16213e 55%,#0f3460 100%) !important;
+}
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] div {
+    color: #e2e8f0 !important;
+}
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 {
+    color: #ffffff !important;
+}
+[data-testid="stSidebar"] hr {
+    border-color: rgba(255,255,255,0.15) !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# ── 히어로 헤더 ──
+st.markdown("""
+<div style="
+    background: linear-gradient(135deg,#667eea 0%,#764ba2 100%);
+    padding: 2rem 2.5rem;
+    border-radius: 20px;
+    margin-bottom: 1.5rem;
+    color: white;
+">
+    <h1 style="margin:0; font-size:2rem; font-weight:900; letter-spacing:-0.5px;">
+        📰 AI 맞춤 기사 요약
+    </h1>
+    <p style="margin:0.4rem 0 0; font-size:1rem; opacity:0.88;">
+        나만의 말투와 스타일로 뉴스를 읽다
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+# ── 사이드바 ──
+with st.sidebar:
+    st.markdown("## 📰 AI 뉴스 요약")
+    st.caption("나만의 말투로 뉴스를 읽다")
+    st.divider()
+
+    st.markdown("### 🚀 빠른 사용법")
+    st.markdown("""
+1. **뉴스 요약** 탭에서 검색
+2. 기사 선택 후 스타일 선택
+3. **요약하기** 클릭
+4. 결과 복사 후 공유!
+    """)
+    st.divider()
+
+    # 통계
+    st.markdown("### 📊 서비스 현황")
+    market_count = len(fetch_market_prompts())
+    st.metric("공유된 프롬프트", f"{market_count}개")
+    st.divider()
+
+    # ── 광고란 ──
+    st.markdown("### 📢 광고")
+    st.markdown("""
+<div style="
+    background: linear-gradient(135deg,#ffecd2,#fcb69f);
+    border-radius: 14px;
+    padding: 14px;
+    text-align: center;
+    margin-bottom: 10px;
+">
+    <p style="font-size:9px; color:#b45309; margin:0 0 6px; font-weight:700;
+              letter-spacing:1px;">ADVERTISEMENT</p>
+    <div style="
+        background: rgba(255,255,255,0.6);
+        border-radius: 10px;
+        height: 160px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 6px;
+    ">
+        <p style="font-size:1.5rem; margin:0;">🛍️</p>
+        <p style="color:#92400e; font-weight:700; margin:0; font-size:0.85rem;">
+            광고 영역
+        </p>
+        <p style="color:#b45309; font-size:0.7rem; margin:0;">240 × 160</p>
+    </div>
+</div>
+
+<div style="
+    background: linear-gradient(135deg,#d4fc79,#96e6a1);
+    border-radius: 14px;
+    padding: 14px;
+    text-align: center;
+">
+    <p style="font-size:9px; color:#166534; margin:0 0 6px; font-weight:700;
+              letter-spacing:1px;">ADVERTISEMENT</p>
+    <div style="
+        background: rgba(255,255,255,0.6);
+        border-radius: 10px;
+        height: 80px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 4px;
+    ">
+        <p style="color:#14532d; font-weight:700; margin:0; font-size:0.85rem;">
+            배너 광고 영역
+        </p>
+        <p style="color:#166534; font-size:0.7rem; margin:0;">240 × 80</p>
+    </div>
+</div>
+    """, unsafe_allow_html=True)
+
+# ── 탭 ──
 tab1, tab2, tab3, tab4, tab5 = st.tabs([
     "📰 뉴스 요약",
     "⚙️ 내 프롬프트 설정",
