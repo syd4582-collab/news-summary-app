@@ -53,7 +53,11 @@ def summarize(article, prompt_instruction):
         json={"model": "llama-3.3-70b-versatile",
               "messages": [{"role": "user", "content": prompt}]},
     )
-    return res.json()["choices"][0]["message"]["content"]
+    data = res.json()
+    if "choices" not in data:
+        error_msg = data.get("error", {}).get("message", str(data))
+        raise ValueError(f"API 오류: {error_msg}")
+    return data["choices"][0]["message"]["content"]
 
 # ── 프롬프트 마켓 ──
 def fetch_market_prompts():
@@ -156,12 +160,13 @@ with tab1:
 
     if st.button("요약하기", type="primary"):
         if article.strip():
-            with st.spinner("요약 중..."):
-                result = summarize(article, prompt_instruction)
-            st.session_state["last_summary"] = {"text": result, "style": style, "article": article}
-
-            # ③ 자동 저장
-            save_history(article[:40] + "...", result, style)
+            try:
+                with st.spinner("요약 중..."):
+                    result = summarize(article, prompt_instruction)
+                st.session_state["last_summary"] = {"text": result, "style": style, "article": article}
+                save_history(article[:40] + "...", result, style)
+            except ValueError as e:
+                st.error(str(e))
         else:
             st.warning("기사 내용을 먼저 입력해주세요.")
 
