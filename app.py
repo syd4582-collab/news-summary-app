@@ -68,12 +68,16 @@ def fetch_market_prompts():
     return res.json() if res.status_code == 200 else []
 
 def upload_prompt(name, content):
+    """업로드 성공 시 생성된 id 반환, 실패 시 None 반환"""
     res = requests.post(
         f"{SUPABASE_URL}/rest/v1/prompts",
         headers={**SUPABASE_HEADERS, "Prefer": "return=representation"},
         json={"name": name, "content": content},
     )
-    return res.status_code == 201
+    if res.status_code == 201:
+        data = res.json()
+        return data[0]["id"] if data else None
+    return None
 
 def like_prompt(prompt_id, current_likes):
     requests.patch(
@@ -81,6 +85,13 @@ def like_prompt(prompt_id, current_likes):
         headers=SUPABASE_HEADERS,
         json={"likes": current_likes + 1},
     )
+
+def delete_prompt(prompt_id):
+    res = requests.delete(
+        f"{SUPABASE_URL}/rest/v1/prompts?id=eq.{prompt_id}",
+        headers=SUPABASE_HEADERS,
+    )
+    return res.status_code in (200, 204)
 
 # ── ③ 요약 히스토리 ──
 def save_history(article_preview, summary, style):
@@ -104,6 +115,10 @@ if "my_prompts" not in st.session_state:
     st.session_state["my_prompts"] = {}
 if "last_summary" not in st.session_state:
     st.session_state["last_summary"] = None
+if "liked_ids" not in st.session_state:
+    st.session_state["liked_ids"] = set()       # 이번 세션에서 좋아요한 id
+if "my_uploaded_ids" not in st.session_state:
+    st.session_state["my_uploaded_ids"] = set() # 이번 세션에서 올린 프롬프트 id
 
 # ───────────── UI ─────────────
 st.set_page_config(page_title="AI 맞춤 기사 요약", page_icon="📰")
@@ -216,8 +231,13 @@ with tab2:
         if st.button("마켓에 공유하기"):
             if new_name.strip() and new_prompt.strip():
                 with st.spinner("공유 중..."):
-                    ok = upload_prompt(new_name, new_prompt)
-                st.success("공유 완료!") if ok else st.error("공유 중 오류 발생.")
+                    new_id = upload_prompt(new_name, new_prompt)
+                if new_id:
+                    st.session_state["my_uploaded_ids"].add(new_id)
+                    st.session_state.pop("market_prompts", None)  # 마켓 캐시 초기화
+                    st.success("공유 완료! '프롬프트 마켓' 탭에서 확인하세요.")
+                else:
+                    st.error("공유 중 오류 발생.")
             else:
                 st.warning("이름과 내용을 모두 입력해주세요.")
 
@@ -251,19 +271,44 @@ with tab3:
         st.info("아직 공유된 프롬프트가 없어요. 첫 번째로 공유해보세요!")
     else:
         for p in market_prompts:
+            pid = p["id"]
+            already_liked = pid in st.session_state["liked_ids"]
+            is_mine       = pid in st.session_state["my_uploaded_ids"]
+
             with st.container(border=True):
                 col_info, col_btn = st.columns([5, 2])
                 with col_info:
-                    st.markdown(f"**{p['name']}**")
+                    label = f"**{p['name']}**"
+                    if is_mine:
+                        label += "  🙋 내가 올린 프롬프트"
+                    st.markdown(label)
                     st.caption(p["content"])
                 with col_btn:
-                    if st.button(f"👍 {p['likes']}", key=f"like_{p['id']}"):
-                        like_prompt(p["id"], p["likes"])
+                    # 좋아요 — 이미 눌렀으면 비활성화
+                    like_label = f"👍 {p['likes']}" if not already_liked else f"✅ {p['likes']}"
+                    if st.button(like_label, key=f"like_{pid}", disabled=already_liked):
+                        like_prompt(pid, p["likes"])
+                        st.session_state["liked_ids"].add(pid)
                         st.session_state.pop("market_prompts", None)
                         st.rerun()
-                    if st.button("내 목록에 추가", key=f"add_{p['id']}"):
+
+                    # 내 목록에 추가
+                    if st.button("내 목록에 추가", key=f"add_{pid}"):
                         st.session_state["my_prompts"][p["name"]] = p["content"]
                         st.success(f"'{p['name']}' 추가 완료!")
+
+                    # 삭제 — 본인 프롬프트만 표시
+                    if is_mine:
+                        if st.button("🗑️ 삭제", key=f"del_market_{pid}", type="secondary"):
+                            with st.spinner("삭제 중..."):
+                                ok = delete_prompt(pid)
+                            if ok:
+                                st.session_state["my_uploaded_ids"].discard(pid)
+                                st.session_state.pop("market_prompts", None)
+                                st.success("삭제됐어요.")
+                                st.rerun()
+                            else:
+                                st.error("삭제 중 오류 발생.")
 
 # ══════════════════════════════════════
 # 탭 4 — ③ 요약 히스토리
